@@ -5,6 +5,7 @@ import { useAsync } from "../lib/hooks";
 import { ArtistLinks, Cover, ErrorBox, LikeButton, Loading, SongList } from "../components/Media";
 import { PauseIcon, PlayIcon } from "../components/Icons";
 import { usePlayer } from "../player/PlayerContext";
+import { DownloadButton } from "../components/Downloads";
 
 export default function SongDetails() {
   const { id = "" } = useParams();
@@ -47,6 +48,7 @@ export default function SongDetails() {
               {isCurrent && p.playing ? <PauseIcon size={22} /> : <PlayIcon size={22} />}
             </button>
             <LikeButton id={song.id} size={24} />
+            <DownloadButton song={song} size={24} />
             <button className="btn" onClick={() => p.addToQueue(song)}>
               Add to queue
             </button>

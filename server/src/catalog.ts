@@ -172,6 +172,14 @@ export async function getOrCreateAlbum(
   const clean = title?.trim();
   if (!clean) return null;
   const albumArtist = opts.albumArtist?.trim() ? await getOrCreateArtist(opts.albumArtist) : null;
+  // No album artist given (e.g. movie name from a file name): join an existing album of that name.
+  if (!albumArtist) {
+    const existing = await albums.find({ titleKey: nameKey(clean) }).sort({ createdAt: 1 }).limit(1).next();
+    if (existing) {
+      if (!existing.year && opts.year) await albums.updateOne({ _id: existing._id }, { $set: { year: opts.year } });
+      return existing;
+    }
+  }
   const res = await albums.findOneAndUpdate(
     { titleKey: nameKey(clean), artistKey: albumArtist ? albumArtist.nameKey : "" },
     {

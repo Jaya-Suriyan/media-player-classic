@@ -180,3 +180,17 @@ export const WifiOffIcon = svg(
     <path d="m2 2 20 20" />
   </>,
 );
+export const DownloadIcon = svg(
+  <>
+    <path d="M12 3v12" />
+    <path d="m7 10 5 5 5-5" />
+    <path d="M5 21h14" />
+  </>,
+);
+export const DownloadedIcon = svg(
+  <>
+    <circle cx="12" cy="12" r="10" fill="currentColor" stroke="none" />
+    <path d="M12 7v8" stroke="#0b1220" />
+    <path d="m8.5 11.5 3.5 3.5 3.5-3.5" stroke="#0b1220" />
+  </>,
+);

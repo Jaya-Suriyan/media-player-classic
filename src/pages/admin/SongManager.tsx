@@ -3,6 +3,7 @@ import { api, formatBytes, formatTime, type AdminSong, type SongPatch, type Song
 import { useAsync, useDebounced } from "../../lib/hooks";
 import { Cover, ErrorBox, Loading } from "../../components/Media";
 import { CloseIcon, SearchIcon } from "../../components/Icons";
+import FindReplace from "./FindReplace";
 
 const PAGE = 50;
 
@@ -276,6 +277,110 @@ function BulkEdit({ ids, onDone, onCancel }: { ids: string[]; onDone: () => void
 }
 
 /* ------------------------------------------------------------------ */
+/* Fix titles (preview + apply)                                         */
+/* ------------------------------------------------------------------ */
+
+type FixPlan = Awaited<ReturnType<typeof api.admin.fixTitles<false>>>;
+
+function FixTitles({ ids, onClose, onDone }: { ids: string[]; onClose: () => void; onDone: () => void }) {
+  const [plan, setPlan] = useState<FixPlan | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.admin.fixTitles(ids, false).then(setPlan, (e: Error) => setError(e.message));
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const total = plan ? plan.changes.length + plan.albums.length : 0;
+  return (
+    <div className="drawer-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label="Fix titles">
+        <header className="drawer-head">
+          <h2>Fix titles</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">
+            <CloseIcon />
+          </button>
+        </header>
+        <p className="muted small">
+          Removes track numbers, movie names, bitrate tags and site names from {ids.length ? `${ids.length} selected` : "all"} songs,
+          and download-site spam from artist names. Titles that are only a number are rebuilt from the file name. Review the
+          changes before applying them.
+        </p>
+        {error && <div className="form-error">{error}</div>}
+        {!plan && !error && <Loading />}
+        {plan && total === 0 && <div className="empty">All titles already look clean.</div>}
+        {plan && total > 0 && (
+          <>
+            <div className="drawer-actions sticky-actions">
+              <button
+                className="btn-primary"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await api.admin.fixTitles(ids, true);
+                    onDone();
+                    onClose();
+                  } catch (e) {
+                    setError((e as Error).message);
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy ? "Applying…" : `Apply ${total} change${total === 1 ? "" : "s"}`}
+              </button>
+              <button className="btn" onClick={onClose}>
+                Cancel
+              </button>
+            </div>
+            {plan.albums.length > 0 && (
+              <>
+                <h3 className="fix-head">Albums</h3>
+                <ul className="fix-list">
+                  {plan.albums.map((a) => (
+                    <li key={a.id}>
+                      <span className="from">{a.from}</span>
+                      <span className="to">{a.to}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {plan.changes.length > 0 && (
+              <>
+                <h3 className="fix-head">Songs ({plan.changes.length}): title, then artist when it changes</h3>
+                <ul className="fix-list">
+                  {plan.changes.map((c) => (
+                    <li key={c.id}>
+                      <span className="from">{c.from}</span>
+                      <span className="to">
+                        {c.to}
+                        {c.track != null && <span className="muted small"> · track {c.track}</span>}
+                      </span>
+                      {c.artistTo && (
+                        <>
+                          <span className="from">{c.artistFrom}</span>
+                          <span className="to small">{c.artistTo}</span>
+                        </>
+                      )}
+                      {c.file && <span className="file">{c.file}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Table                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -287,6 +392,8 @@ export default function SongManager({ onChange }: { onChange: () => void }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<AdminSong | null>(null);
   const [bulk, setBulk] = useState(false);
+  const [fixing, setFixing] = useState<string[] | null>(null);
+  const [replacing, setReplacing] = useState<string[] | null>(null);
   const dq = useDebounced(q, 250);
 
   const { data, error, loading, reload } = useAsync(
@@ -345,6 +452,12 @@ export default function SongManager({ onChange }: { onChange: () => void }) {
           <option value="artist">Artist / album</option>
           <option value="plays">Most played</option>
         </select>
+        <button className="btn" onClick={() => setReplacing([])} title="Replace an artist, album, title or genre across songs">
+          Find &amp; replace
+        </button>
+        <button className="btn" onClick={() => setFixing([])} title="Clean up messy titles of all songs">
+          Fix titles
+        </button>
       </div>
 
       {selected.size > 0 && !bulk && (
@@ -352,6 +465,12 @@ export default function SongManager({ onChange }: { onChange: () => void }) {
           <span>{selected.size} selected</span>
           <button className="btn" onClick={() => setBulk(true)}>
             Edit details
+          </button>
+          <button className="btn" onClick={() => setReplacing([...selected])}>
+            Find &amp; replace
+          </button>
+          <button className="btn" onClick={() => setFixing([...selected])}>
+            Fix titles
           </button>
           <button
             className="btn danger"
@@ -448,6 +567,19 @@ export default function SongManager({ onChange }: { onChange: () => void }) {
             </button>
           </div>
         </>
+      )}
+
+      {replacing && <FindReplace ids={replacing} onClose={() => setReplacing(null)} onDone={refresh} />}
+
+      {fixing && (
+        <FixTitles
+          ids={fixing}
+          onClose={() => setFixing(null)}
+          onDone={() => {
+            setSelected(new Set());
+            refresh();
+          }}
+        />
       )}
 
       {editing && (

@@ -3,6 +3,9 @@ import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAsync } from "../lib/hooks";
 import { historyStore } from "../lib/library";
+import { downloadsStore } from "../lib/downloads";
+import { useOnline } from "../lib/hooks";
+import { PlayButton } from "../components/Media";
 import { AlbumCard, ArtistCard, ErrorBox, Loading, Shelf, SongCard, SongList } from "../components/Media";
 
 function greeting() {
@@ -24,9 +27,46 @@ function RecentlyPlayed() {
   );
 }
 
-export default function Home() {
-  const { data, error, loading, reload } = useAsync(() => api.home(), []);
+/** Shown when the server can't be reached: what's on the device still plays. */
+function OfflineHome({ onRetry }: { onRetry: () => void }) {
+  const downloads = downloadsStore.use();
+  const songs = Object.values(downloads)
+    .sort((a, b) => b.at - a.at)
+    .map((d) => d.song);
+  return (
+    <div className="home">
+      <h1 className="page-title">You're offline</h1>
+      {songs.length ? (
+        <>
+          <p className="muted">Your downloaded songs are ready to play.</p>
+          <div className="hero-actions">
+            <PlayButton songs={songs} />
+            <Link to="/library/downloads" className="btn">
+              All downloads
+            </Link>
+          </div>
+          <SongList songs={songs.slice(0, 20)} />
+        </>
+      ) : (
+        <div className="empty-hero">
+          <h2>Nothing downloaded yet</h2>
+          <p>When you're back online, tap the download button on songs or albums to play them without internet.</p>
+          <button className="btn" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
+export default function Home() {
+  const online = useOnline();
+  const { data, error, loading, reload } = useAsync(() => api.home(), [online]);
+
+  if (error && !data && (!online || error.message.includes("offline") || error.message.includes("reach"))) {
+    return <OfflineHome onRetry={reload} />;
+  }
   if (error && !data) return <ErrorBox error={error} onRetry={reload} />;
   if (loading && !data) return <Loading />;
   if (!data) return null;

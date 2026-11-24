@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAsync } from "../lib/hooks";
 import { AlbumCard, Cover, ErrorBox, Loading, PlayButton, Shelf, SongList } from "../components/Media";
+import { DownloadAllButton } from "../components/Downloads";
 
 export default function Artist() {
   const { id = "" } = useParams();
@@ -23,6 +24,7 @@ export default function Artist() {
           <div className="muted">{artist.songCount} songs</div>
           <div className="hero-actions">
             <PlayButton songs={songs} />
+            <DownloadAllButton songs={songs} label="Download all" />
           </div>
         </div>
       </header>

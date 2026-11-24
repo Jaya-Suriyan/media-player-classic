@@ -126,6 +126,10 @@ export const api = {
       { signal },
     ),
 
+  /** Where to fetch the single-file version of a song for offline use. */
+  offlineFile: (id: string, quality: "48k" | "96k" | "160k") =>
+    request<{ url: string; quality: string }>(`/api/songs/${id}/offline${qs({ quality })}`),
+
   /** HLS master playlist (adaptive) or a single fixed-bitrate variant. */
   streamUrl: (id: string, variant?: "48k" | "96k" | "160k") =>
     absUrl(variant ? `/api/stream/${id}/${variant}/index.m3u8` : `/api/stream/${id}/master.m3u8`),
@@ -170,6 +174,57 @@ export const api = {
         body: fd,
       });
     },
+    /** Preview (apply=false) or apply title clean-up for the given songs, or all when ids is empty. */
+    fixTitles: <A extends boolean>(ids: string[], apply: A) =>
+      request<
+        A extends true
+          ? { applied: { songs: number; albums: number } }
+          : {
+              changes: {
+                id: string;
+                from: string;
+                to: string;
+                track: number | null;
+                file: string | null;
+                artistFrom?: string;
+                artistTo?: string;
+              }[];
+              albums: { id: string; from: string; to: string }[];
+            }
+      >("/api/admin/songs/fix-titles", { method: "POST", body: JSON.stringify({ ids: ids.length ? ids : undefined, apply }) }),
+    /** Find & replace in song details (case-insensitive). apply=false returns a preview. */
+    replace: (req: {
+      field: ReplaceField;
+      find: string;
+      replace: string;
+      mode: "exact" | "contains";
+      ids?: string[];
+      apply: boolean;
+    }) =>
+      request<{
+        changes?: { id: string; title: string; from: string; to: string }[];
+        total?: number;
+        albumWide?: boolean;
+        updated?: number;
+      }>("/api/admin/songs/replace", { method: "POST", body: JSON.stringify({ ...req, ids: req.ids?.length ? req.ids : undefined }) }),
+    storage: {
+      get: () => request<StorageState>("/api/admin/storage"),
+      save: (body: { target?: StorageBackend; r2?: R2Form | null; s3?: S3Form | null }) =>
+        request<StorageState>("/api/admin/storage", { method: "PUT", body: JSON.stringify(body) }),
+      test: (body: { backend: "r2" | "s3"; r2?: R2Form; s3?: S3Form }) =>
+        request<StorageTest>("/api/admin/storage/test", {
+          method: "POST",
+          body: JSON.stringify({ ...body, origin: location.origin }),
+        }),
+      allowSite: (backend: "r2" | "s3") =>
+        request<{ ok: true; origins: string[] }>("/api/admin/storage/cors", {
+          method: "POST",
+          body: JSON.stringify({ backend, origin: location.origin }),
+        }),
+      move: (from: StorageBackend, to: StorageBackend) =>
+        request<{ move: MoveJob }>("/api/admin/storage/move", { method: "POST", body: JSON.stringify({ from, to }) }),
+      cancelMove: () => request<{ move: MoveJob }>("/api/admin/storage/move/cancel", { method: "POST" }),
+    },
     changePassword: (current: string, next: string) =>
       request<{ ok: true }>("/api/admin/password", { method: "POST", body: JSON.stringify({ current, next }) }),
     /** Upload a single file with progress (XHR, since fetch has no upload progress). */
@@ -197,6 +252,58 @@ export const api = {
       }),
   },
 };
+
+export type StorageBackend = "local" | "r2" | "s3";
+
+export interface R2Form {
+  accountId: string;
+  bucket: string;
+  accessKeyId: string;
+  /** Empty = keep saved secret. */
+  secretAccessKey?: string;
+  publicUrl: string;
+  jurisdiction: "" | "eu";
+}
+
+export interface S3Form {
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey?: string;
+  publicUrl: string;
+  endpoint: string;
+  forcePathStyle: boolean;
+}
+
+export interface MoveJob {
+  running: boolean;
+  from: StorageBackend;
+  to: StorageBackend;
+  total: number;
+  done: number;
+  failed: { id: string; title: string; error: string }[];
+  bytes: number;
+  current: string | null;
+}
+
+export interface StorageState {
+  target: StorageBackend;
+  effectiveTarget: StorageBackend;
+  configured: Record<StorageBackend, boolean>;
+  r2: (Omit<R2Form, "secretAccessKey"> & { hasSecret: boolean }) | null;
+  s3: (Omit<S3Form, "secretAccessKey"> & { hasSecret: boolean }) | null;
+  localDir: string;
+  counts: Record<StorageBackend, number>;
+  move: MoveJob | null;
+}
+
+export interface StorageTest {
+  ok: boolean;
+  steps: { name: string; ok: boolean; detail?: string }[];
+  cors: "ok" | "missing" | "unknown";
+}
+
+export type ReplaceField = "artist" | "title" | "album" | "albumArtist" | "genre";
 
 export interface SongPatch {
   title?: string;

@@ -19,6 +19,8 @@ export interface Storage {
   /** Readable stream (used for local serving). */
   getStream(key: string, range?: { start: number; end?: number }): Promise<Readable>;
   exists(key: string): Promise<boolean>;
+  /** All objects under a prefix (used when moving songs between storages). */
+  list(prefix: string): Promise<{ key: string; size: number }[]>;
   deletePrefix(prefix: string): Promise<void>;
   /**
    * URL a client can fetch directly. For private S3 buckets this is a signed

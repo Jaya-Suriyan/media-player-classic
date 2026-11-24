@@ -6,6 +6,7 @@ import { useAsync } from "../../lib/hooks";
 import { Loading } from "../../components/Media";
 import UploadPanel from "./UploadPanel";
 import SongManager from "./SongManager";
+import StorageSettings from "./StorageSettings";
 
 function Login() {
   const { login } = useAuth();
@@ -83,7 +84,7 @@ function Stats() {
       </div>
       <div className="stat">
         <b>{formatBytes(data.bytes)}</b>
-        <span>Originals ({data.storage})</span>
+        <span>Uploads go to: {({ local: "Local", r2: "Cloudflare R2", s3: "Amazon S3" } as Record<string, string>)[data.storage] ?? data.storage}</span>
       </div>
       {busy > 0 && (
         <div className="stat warn">
@@ -157,6 +158,7 @@ export default function Admin() {
         <nav className="tabs">
           <NavLink to="/admin/upload">Upload</NavLink>
           <NavLink to="/admin/songs">Songs</NavLink>
+          <NavLink to="/admin/storage">Storage</NavLink>
           <NavLink to="/admin/account">Account</NavLink>
         </nav>
       </div>
@@ -165,6 +167,7 @@ export default function Admin() {
         <Route index element={<Navigate to="upload" replace />} />
         <Route path="upload" element={<UploadPanel onChange={bump} />} />
         <Route path="songs" element={<SongManager onChange={bump} />} />
+        <Route path="storage" element={<StorageSettings />} />
         <Route path="account" element={<Account />} />
       </Routes>
     </div>

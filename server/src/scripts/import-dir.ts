@@ -12,6 +12,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { config } from "../config.js";
 import { client, connectDb, newId, songs } from "../db.js";
+import { loadStorageSettings, uploadTarget } from "../storage-settings.js";
 import { AUDIO_EXTENSIONS, ingestAudioFile, queueState } from "../media/pipeline.js";
 
 const { values, positionals } = parseArgs({
@@ -26,6 +27,8 @@ async function main() {
     process.exit(1);
   }
   await connectDb();
+  await loadStorageSettings();
+  console.log(`Saving to: ${uploadTarget()}`);
   const entries = await fsp.readdir(path.resolve(dir), { recursive: true, withFileTypes: true });
   const files = entries
     .filter((e) => e.isFile() && AUDIO_EXTENSIONS.has(path.extname(e.name).toLowerCase()))

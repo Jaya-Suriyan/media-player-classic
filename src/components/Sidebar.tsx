@@ -1,6 +1,6 @@
 import React from "react";
 import { NavLink } from "react-router-dom";
-import { HeartIcon, HomeIcon, LibraryIcon, MusicIcon, SearchIcon, UploadIcon } from "./Icons";
+import { DownloadIcon, HeartIcon, HomeIcon, LibraryIcon, MusicIcon, SearchIcon, UploadIcon } from "./Icons";
 
 const nav = ({ isActive }: { isActive: boolean }) => (isActive ? "active" : "");
 
@@ -28,6 +28,9 @@ export default function Sidebar({ isAdmin }: { isAdmin: boolean }) {
         </NavLink>
         <NavLink to="/library/liked" className={nav}>
           <HeartIcon /> Liked songs
+        </NavLink>
+        <NavLink to="/library/downloads" className={nav}>
+          <DownloadIcon /> Downloads
         </NavLink>
       </div>
       <div className="nav-label">Browse</div>

@@ -26,7 +26,10 @@ import {
   queueState,
   storeCover,
 } from "../media/pipeline.js";
-import { storage } from "../storage/index.js";
+import { BACKENDS, backendOf, isConfigured, type BackendName } from "../storage/index.js";
+import { uploadTarget } from "../storage-settings.js";
+import { applyTitleFixes, planTitleFixes } from "../media/fix-titles.js";
+import { applyReplace, previewReplace } from "../media/replace.js";
 
 const optionalText = (max: number) =>
   z
@@ -61,7 +64,7 @@ async function deleteCoverIfUnused(prefix: string | null) {
 
 async function removeSong(doc: SongDoc) {
   await deleteSongDoc(doc);
-  await deleteSongMedia(doc._id);
+  await deleteSongMedia(doc._id, doc.originalKey);
   await deleteCoverIfUnused(doc.coverKey);
 }
 
@@ -128,7 +131,7 @@ export async function adminRoutes(app: FastifyInstance) {
         bytes: t.bytes,
         byStatus: Object.fromEntries(byStatus.map((r) => [r._id, r.n])),
         queue: queueState(),
-        storage: storage.driver,
+        storage: uploadTarget(),
       };
     });
 
@@ -182,6 +185,8 @@ export async function adminRoutes(app: FastifyInstance) {
      */
     admin.post("/api/admin/upload", async (req, reply) => {
       const overrides: Record<string, string | number> = {};
+      // Optional "storage" field (local | r2 | s3) before the files: where this batch is saved.
+      let backend: BackendName = uploadTarget();
       const created: string[] = [];
       const errors: { file: string; error: string }[] = [];
 
@@ -191,6 +196,11 @@ export async function adminRoutes(app: FastifyInstance) {
           if (!v) continue;
           if (["artistName", "albumTitle", "albumArtist", "genre"].includes(part.fieldname)) overrides[part.fieldname] = v.slice(0, 300);
           if (part.fieldname === "year" && /^\d{4}$/.test(v)) overrides.year = Number(v);
+          if (part.fieldname === "storage") {
+            if (!BACKENDS.includes(v as BackendName)) return reply.code(400).send({ error: `Unknown storage "${v}"` });
+            if (!isConfigured(v as BackendName)) return reply.code(400).send({ error: `Storage "${v}" is not set up yet. Configure it in Admin → Storage.` });
+            backend = v as BackendName;
+          }
           continue;
         }
         const name = path.basename(part.filename || "upload");
@@ -204,7 +214,7 @@ export async function adminRoutes(app: FastifyInstance) {
         try {
           await pipeline(part.file, fs.createWriteStream(tmp));
           if (part.file.truncated) throw new Error(`File is larger than ${config.maxUploadBytes / 1024 / 1024} MB`);
-          created.push(await ingestAudioFile(tmp, name, overrides));
+          created.push(await ingestAudioFile(tmp, name, overrides, backend));
         } catch (err) {
           errors.push({ file: name, error: (err as Error).message });
           await fsp.rm(tmp, { force: true });
@@ -230,6 +240,37 @@ export async function adminRoutes(app: FastifyInstance) {
       let updated = 0;
       for (const id of body.ids) if (await updateSong(id, body.patch)) updated++;
       return { updated };
+    });
+
+    /**
+     * Clean up titles of songs already uploaded ("008" → "Neruppu", "01 - Movie - Song" → "Song").
+     * `apply: false` returns a preview; `ids` limits it to selected songs.
+     */
+    admin.post("/api/admin/songs/fix-titles", async (req) => {
+      const body = z.object({ ids: z.array(z.string().max(40)).max(20_000).optional(), apply: z.boolean().default(false) }).parse(req.body ?? {});
+      if (!body.apply) return planTitleFixes(body.ids);
+      return { applied: await applyTitleFixes(body.ids) };
+    });
+
+    /**
+     * Find & replace in song details (case-insensitive). Artists are matched one by one,
+     * so a single artist can be replaced inside "A, B, C". `apply: false` previews.
+     */
+    admin.post("/api/admin/songs/replace", async (req, reply) => {
+      const body = z
+        .object({
+          field: z.enum(["artist", "title", "album", "albumArtist", "genre"]),
+          find: z.string().trim().min(1).max(300),
+          replace: z.string().max(300).default(""),
+          mode: z.enum(["exact", "contains"]).default("exact"),
+          ids: z.array(z.string().max(40)).max(20_000).optional(),
+          apply: z.boolean().default(false),
+        })
+        .parse(req.body);
+      if (body.field === "title" && !body.replace.trim() && body.mode === "exact") {
+        return reply.code(400).send({ error: "A song title can't be empty." });
+      }
+      return body.apply ? applyReplace(body) : previewReplace(body);
     });
 
     admin.post("/api/admin/songs/bulk-delete", async (req) => {
@@ -270,7 +311,7 @@ export async function adminRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "File must be an image" });
       }
       const buf = await file.toBuffer();
-      const prefix = await storeCover(id, buf);
+      const prefix = await storeCover(id, buf, backendOf(doc.originalKey));
       await setSongFields(id, { coverKey: prefix });
       if (applyToAlbum && doc.albumId) {
         const album = await albums.findOneAndUpdate({ _id: doc.albumId }, { $set: { coverKey: prefix } });

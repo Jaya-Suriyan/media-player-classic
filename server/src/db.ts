@@ -88,6 +88,11 @@ export interface SongDoc {
   search: SearchIndex;
 }
 
+export interface SettingsDoc {
+  _id: string;
+  [key: string]: unknown;
+}
+
 export const client = new MongoClient(config.mongoUrl, { maxPoolSize: 20 });
 const database = client.db(config.mongoDb);
 
@@ -95,6 +100,7 @@ export const users: Collection<UserDoc> = database.collection("users");
 export const artists: Collection<ArtistDoc> = database.collection("artists");
 export const albums: Collection<AlbumDoc> = database.collection("albums");
 export const songs: Collection<SongDoc> = database.collection("songs");
+export const settings: Collection<SettingsDoc> = database.collection("settings");
 
 /** Case-insensitive matching for genre filters / grouping. */
 export const GENRE_COLLATION = { locale: "en", strength: 2 } as const;

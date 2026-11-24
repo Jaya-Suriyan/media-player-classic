@@ -4,7 +4,8 @@ import fastifyStatic from "@fastify/static";
 import { getSong } from "../catalog.js";
 import { config } from "../config.js";
 import { LADDER, masterPlaylist } from "../media/ffmpeg.js";
-import { storage } from "../storage/index.js";
+import { backendOf, storage } from "../storage/index.js";
+import { ensureOfflineFile, type Variant } from "../media/offline.js";
 
 const VARIANTS = new Set<string>(LADDER.map((v) => v.name));
 const M3U8 = "application/vnd.apple.mpegurl";
@@ -70,12 +71,31 @@ export async function streamRoutes(app: FastifyInstance) {
     }
     return reply
       .type(M3U8)
-      .header("cache-control", storage.driver === "local" ? "public, max-age=86400" : "private, max-age=600")
+      .header("cache-control", backendOf(baseKey) === "local" ? "public, max-age=86400" : "private, max-age=600")
       .send(cached.body);
   });
 
-  // Local storage driver: serve HLS segments + covers with range & caching support.
-  if (storage.driver === "local") {
+  /**
+   * Single-file download for offline playback. Returns where to fetch it
+   * (CDN / signed URL / this server), so audio bytes never pass through Node with S3/R2.
+   */
+  app.get(
+    "/api/songs/:id/offline",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const q = (req.query as { quality?: string }).quality ?? "96k";
+      if (!VARIANTS.has(q)) return reply.code(400).send({ error: "Unknown quality" });
+      const row = await getSong(id);
+      if (!row || row.status !== "ready" || !row.hlsKey) return reply.code(404).send({ error: "Not available" });
+      const key = await ensureOfflineFile(row, q as Variant);
+      return reply.header("cache-control", "private, max-age=600").send({ url: await storage.url(key), quality: q });
+    },
+  );
+
+  // Local storage (option 1): serve HLS segments + covers with range & caching support.
+  // Always on, since songs on local disk can coexist with songs on R2 / S3.
+  {
     await app.register(fastifyStatic, {
       root: config.storage.localDir,
       prefix: "/media/",

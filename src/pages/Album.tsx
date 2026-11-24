@@ -4,6 +4,7 @@ import { api, formatTime } from "../lib/api";
 import { useAsync } from "../lib/hooks";
 import { Cover, ErrorBox, Loading, PlayButton, SongList } from "../components/Media";
 import { ShuffleIcon } from "../components/Icons";
+import { DownloadAllButton } from "../components/Downloads";
 import { usePlayer } from "../player/PlayerContext";
 
 export default function Album() {
@@ -39,6 +40,7 @@ export default function Album() {
             >
               <ShuffleIcon size={22} />
             </button>
+            <DownloadAllButton songs={songs} />
           </div>
         </div>
       </header>

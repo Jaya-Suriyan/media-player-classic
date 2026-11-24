@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useState } from "react";
-import { Route, Routes, useLocation } from "react-router-dom";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
 import Sidebar, { MobileNav } from "./components/Sidebar";
 import TopSearch from "./components/TopSearch";
 import { Loading } from "./components/Media";
@@ -55,7 +55,8 @@ function Shell() {
       <main className="main" id="main">
         {!online && (
           <div className="offline-banner" role="status">
-            <WifiOffIcon size={16} /> You're offline. Playback continues from what's already buffered.
+            <WifiOffIcon size={16} /> You're offline. Downloaded songs still play.{" "}
+            <Link to="/library/downloads">Open downloads</Link>
           </div>
         )}
         {!isAdmin && (
@@ -73,6 +74,7 @@ function Shell() {
             <Route path="/library" element={<Library tab="all" />} />
             <Route path="/library/liked" element={<Library tab="liked" />} />
             <Route path="/library/history" element={<Library tab="history" />} />
+            <Route path="/library/downloads" element={<Library tab="downloads" />} />
             <Route path="/browse/:kind" element={<Browse />} />
             <Route path="/genre/:genre" element={<Browse />} />
             <Route

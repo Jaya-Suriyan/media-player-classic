@@ -1,5 +1,9 @@
 import path from "node:path";
 import { parseFile } from "music-metadata";
+import { clean, realLyrics } from "./clean.js";
+import { cleanAlbumTitle, cleanArtistCredit, cleanSongTitle, isMeaningfulTitle } from "./title.js";
+
+export { clean } from "./clean.js";
 
 export interface ExtractedMeta {
   title: string;
@@ -15,12 +19,19 @@ export interface ExtractedMeta {
   picture: { data: Buffer; format: string } | null;
 }
 
+export interface NameLookup {
+  /** Is this an artist already in the library? Used to read "Artist - Song" file names correctly. */
+  isKnownArtist?: (name: string) => Promise<boolean>;
+}
+
 /**
- * Read ID3 / Vorbis / MP4 tags. Falls back to parsing the file name
- * ("Artist - Title.mp3", "01 - Title.mp3", "01. Title.mp3").
+ * Read ID3 / Vorbis / MP4 tags, falling back to the file name. Titles from
+ * either source are cleaned: track numbers ("1001. "), movie names
+ * ("Movie - Song", "(From Movie)"), bitrate / "Official Audio" noise and
+ * download-site watermarks are removed; a movie name found there becomes
+ * the album when the tags have none.
  */
-export async function extractMetadata(filePath: string, originalName: string): Promise<ExtractedMeta> {
-  const fromName = parseFileName(originalName);
+export async function extractMetadata(filePath: string, originalName: string, lookup: NameLookup = {}): Promise<ExtractedMeta> {
   let common: Awaited<ReturnType<typeof parseFile>>["common"] | undefined;
   let duration: number | null = null;
   try {
@@ -31,71 +42,46 @@ export async function extractMetadata(filePath: string, originalName: string): P
     /* unreadable tags — rely on file name */
   }
 
+  // Spam credits ("EelamMp3.Com, TamilGood.Com Free … Mp3 Songs") are dropped.
+  const tagArtist = cleanArtistCredit(common?.artists?.length ? common.artists.join(", ") : common?.artist);
+  const tagAlbumArtist = cleanArtistCredit(common?.albumartist);
+  const tagAlbum = cleanAlbumTitle(common?.album) ?? "";
+  const ctx = {
+    album: tagAlbum || null,
+    artists: [...tagArtist.split(/\s*[,&;]\s*/), tagAlbumArtist].filter(Boolean),
+  };
+
+  const fromName = cleanSongTitle(path.parse(originalName).name, ctx);
+  // Title tags that are just "008" / "Track 3" are ignored in favour of the file name.
+  const fromTag = isMeaningfulTitle(common?.title) ? cleanSongTitle(common!.title!, ctx) : null;
+  if (fromTag && !isMeaningfulTitle(fromTag.title)) fromTag.title = fromName.title;
+  const best = fromTag ?? fromName;
+
+  // "X - Song" where X is unknown: an existing artist → artist, otherwise → movie / album.
+  let artistGuess: string | null = best.artist ?? fromName.artist;
+  let albumGuess: string | null = best.album ?? fromName.album;
+  const prefix = best.unknownPrefix ?? fromName.unknownPrefix;
+  if (prefix) {
+    if (!tagArtist && lookup.isKnownArtist && (await lookup.isKnownArtist(prefix))) artistGuess ??= prefix;
+    else albumGuess ??= prefix;
+  }
+
   const pic = common?.picture?.[0];
   const lyricsTag = common?.lyrics?.[0] as unknown;
   const lyrics =
     typeof lyricsTag === "string" ? lyricsTag : (lyricsTag as { text?: string } | undefined)?.text ?? null;
 
   return {
-    title: clean(common?.title) || fromName.title,
-    artistName:
-      clean(common?.artists?.length ? common.artists.join(", ") : common?.artist) ||
-      clean(common?.albumartist) ||
-      fromName.artist ||
-      "Unknown Artist",
-    albumTitle: clean(common?.album) || null,
-    albumArtist: clean(common?.albumartist) || null,
-    trackNo: common?.track?.no ?? fromName.track,
+    title: best.title,
+    artistName: tagArtist || tagAlbumArtist || artistGuess || "Unknown Artist",
+    albumTitle: tagAlbum || cleanAlbumTitle(albumGuess) || null,
+    albumArtist: tagAlbumArtist || null,
+    trackNo: common?.track?.no ?? best.track ?? fromName.track,
     discNo: common?.disk?.no ?? null,
     genre: clean(common?.genre?.[0]) || null,
-    year: common?.year ?? null,
+    year: common?.year ?? best.year ?? fromName.year,
     duration,
     lyrics: realLyrics(lyrics),
     picture: pic ? { data: Buffer.from(pic.data), format: pic.format } : null,
   };
-}
-
-/**
- * Download sites stamp their domain into tags: "Song - MassTamilan.com",
- * "Album [www.site.in]", "(Starmusiq.com)". Strip those.
- */
-const SITE = String.raw`(?:www\.)?[a-z0-9][a-z0-9-]*\.(?:com|net|org|in|co|info|io|me|cc|fm|tv|xyz|pk|lk|biz|cool|club|site|online|live|to|la|ws|mobi)(?:\.[a-z]{2})?`;
-const WATERMARKS = [
-  new RegExp(String.raw`\s*[\[(]\s*${SITE}\s*[\])]`, "gi"),
-  new RegExp(String.raw`\s*(?:[-–—|:~]|::)\s*${SITE}\s*$`, "gi"),
-  new RegExp(String.raw`^\s*${SITE}\s*(?:[-–—|:~]|::)\s*`, "gi"),
-  new RegExp(String.raw`^\s*${SITE}\s*$`, "gi"),
-];
-
-/** Short "lyrics" that mention a website are download-site adverts, not lyrics. */
-function realLyrics(text: string | null) {
-  const t = text?.replace(/\u0000/g, "").trim();
-  if (!t) return null;
-  if (t.length < 300 && new RegExp(SITE, "i").test(t)) return null;
-  return t;
-}
-
-export function clean(s: string | undefined | null) {
-  let out = (s ?? "").replace(/\u0000/g, "").trim();
-  for (const re of WATERMARKS) out = out.replace(re, "");
-  return out.replace(/\s{2,}/g, " ").trim();
-}
-
-export function parseFileName(name: string) {
-  let base = clean(path.parse(name).name.replace(/_/g, " "));
-  let track: number | null = null;
-  const t = base.match(/^(\d{1,3})\s*[-.)]\s*(.+)$/);
-  if (t) {
-    track = Number(t[1]);
-    base = t[2];
-  }
-  let artist: string | null = null;
-  const parts = base.split(/\s+-\s+/);
-  if (parts.length >= 2) {
-    artist = parts[0].trim();
-    base = parts.slice(1).join(" - ");
-  }
-  // "Un-Punnagai" → "Un Punnagai" only when it is clearly a slug (no spaces).
-  const title = !base.includes(" ") ? base.replace(/-/g, " ") : base;
-  return { title: title.trim() || "Untitled", artist, track };
 }

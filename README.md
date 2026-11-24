@@ -25,7 +25,9 @@ Open http://localhost:5173/admin and sign in with `ADMIN_EMAIL` / `ADMIN_PASSWOR
 
 **Listening**
 - Adaptive streaming (HLS): every song is converted to 48 / 96 / 160 kbps. Playback starts on the lowest bitrate so it begins quickly, then moves up when the network allows.
-- Buffers about a minute ahead, retries automatically with back-off on weak networks, and resumes when the connection returns.
+- Buffers the whole song ahead (a song is only 2–6 MB), then pre-loads the next song in the queue, so dead zones don't interrupt playback and the next track starts instantly. Pre-loading is skipped when the device has data saver turned on.
+- Retries automatically with back-off on weak networks, and resumes when the connection returns.
+- **Offline downloads:** download songs, albums or all of an artist's songs. Each song is saved as a single file (48, 96 or 160 kbps, set in Library → Downloads) and plays with no internet on any browser, including iPhone. When offline, the app opens on your downloads, skips songs that aren't downloaded, and restores your queue from downloaded songs. The server builds the single file from existing stream segments without re-encoding (about 0.1 s), once per song and quality.
 - Quality setting: Auto, Data saver (always 48 kbps, about 22 MB per hour) or High. Devices with data saver turned on, or on a 2G connection, default to Data saver.
 - Queue: play next, add to queue, drag to reorder, shuffle, repeat one or all. When the queue ends, similar songs keep playing (can be turned off).
 - Sleep timer, lyrics, liked songs, recently played, share links.
@@ -64,16 +66,21 @@ player ──► /api/stream/:id/master.m3u8 ──► /api/stream/:id/<bitrate>
 - With S3 or R2, audio bytes never pass through the API server, so it stays cheap to run.
 - Original uploads are kept, but they are never served to listeners.
 
-## Storage options (`server/.env`)
+## Storage: 1 Local · 2 Cloudflare R2 · 3 Amazon S3
 
-| Store | Settings |
-|---|---|
-| Local disk | `STORAGE_DRIVER=local` (files go to `DATA_DIR/media`) |
-| AWS S3 | `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_REGION`, keys |
-| Cloudflare R2 | `STORAGE_DRIVER=s3`, `S3_ENDPOINT=https://<account>.r2.cloudflarestorage.com`, `S3_REGION=auto`, keys. Set `S3_PUBLIC_BASE_URL` to the bucket's public/custom domain to serve through Cloudflare's CDN (free egress). |
-| MinIO / B2 / Wasabi | `STORAGE_DRIVER=s3`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE=true` (MinIO) |
+Choose in **Admin → Storage**. No config files to edit.
 
-Without `S3_PUBLIC_BASE_URL` the bucket can stay private: the API generates signed URLs that last 6 hours.
+1. **Local:** files on this server's disk (`DATA_DIR/media`), streamed by the API. This is the default.
+2. **Cloudflare R2:** enter Account ID, bucket, R2 API token (Object Read & Write) and optionally the bucket's public URL (r2.dev or a custom domain) to stream through Cloudflare's CDN with free bandwidth.
+3. **Amazon S3:** region, bucket and access key, plus an optional CloudFront/public URL. Also works with S3-compatible services (Wasabi, Backblaze B2, MinIO) via the Endpoint field.
+
+- **Test connection** uploads, reads, fetches (as the player would) and deletes a small test file, and reports each step.
+- **Allow this site** adds the bucket CORS rule browsers need to stream from it. If the key isn't allowed to change bucket settings, the page explains where to add the rule by hand.
+- Each song remembers where its files are, so storages can be mixed and the upload target can change at any time. The Upload page also has a **Save to** choice for each batch.
+- **Move songs** copies a storage's songs to another one (original, streams, downloads, cover), switches them over and then deletes the old copies. Songs keep playing while they move.
+- Without a public URL the bucket can stay private: the API hands out signed links (6 h).
+- Secret keys are stored encrypted in MongoDB using `SETTINGS_SECRET` (falls back to `JWT_SECRET`) and are never sent back to the browser. **If you change that secret, re-enter the storage keys.**
+- On first start, any `STORAGE_DRIVER=s3` + `S3_*` values in `.env` are imported automatically (an R2 endpoint becomes option 2).
 
 ## Bulk import from a folder on the server
 

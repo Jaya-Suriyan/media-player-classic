@@ -4,6 +4,14 @@ import type { HlsConfig } from "hls.js";
 import { api, absUrl, type Song } from "../lib/api";
 import { createStore } from "../lib/hooks";
 import { pushHistory, settingsStore, suggestedQuality, type Quality } from "../lib/library";
+import { downloadsStore, isDownloaded, offlineObjectUrl } from "../lib/downloads";
+
+/** HLS variants, lowest first (must match the server ladder). */
+const VARIANTS = ["48k", "96k", "160k"] as const;
+const variantForBitrate = (bps: number | null | undefined) =>
+  !bps ? null : bps <= 64_000 ? "48k" : bps <= 128_000 ? "96k" : "160k";
+const saveData = () =>
+  !!(navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData;
 
 /* ------------------------------------------------------------------ */
 /* Progress lives in its own store so only the seek bar re-renders      */
@@ -44,6 +52,8 @@ export interface PlayerState {
   sleep: SleepTimer;
   /** Bitrate currently streaming (bps), when known. */
   bitrate: number | null;
+  /** Playing a downloaded copy (works offline). */
+  offlineSource: boolean;
 }
 
 export interface PlayerActions {
@@ -89,7 +99,7 @@ const isAppleWebKit = () =>
   /^((?!chrome|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
 
 /** hls.js tuned for slow & flaky mobile networks. */
-function hlsConfig(quality: Quality, lastEstimate: number | null): Partial<HlsConfig> {
+function hlsConfig(quality: Quality, lastEstimate: number | null, startLevel?: number): Partial<HlsConfig> {
   const retry = {
     maxNumRetry: 8,
     retryDelayMs: 1000,
@@ -101,14 +111,16 @@ function hlsConfig(quality: Quality, lastEstimate: number | null): Partial<HlsCo
   return {
     enableWorker: true,
     // Start on the lowest bitrate so playback begins fast; ABR climbs when the network allows.
-    startLevel: quality === "high" ? 2 : 0,
+    startLevel: startLevel ?? (quality === "high" ? 2 : 0),
     abrEwmaDefaultEstimate: lastEstimate ?? 120_000,
     abrBandWidthFactor: 0.8,
     abrBandWidthUpFactor: 0.6,
-    // Audio is tiny: buffer a full minute ahead to ride out tunnels and dead zones.
-    maxBufferLength: 60,
-    maxMaxBufferLength: 180,
-    backBufferLength: 30,
+    // Audio is tiny (a whole song is 2–6 MB): buffer the entire song ahead so
+    // tunnels and dead zones don't interrupt it, and keep what was played for instant seeking back.
+    maxBufferLength: 900,
+    maxMaxBufferLength: 1800,
+    maxBufferSize: 120 * 1000 * 1000,
+    backBufferLength: 900,
     manifestLoadPolicy: policy(10_000, 20_000),
     playlistLoadPolicy: policy(10_000, 20_000),
     fragLoadPolicy: policy(15_000, 60_000),
@@ -139,6 +151,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const retryTimer = useRef<number | null>(null);
   const listened = useRef({ id: "", seconds: 0, lastTime: 0, reported: false });
   const unshuffledRef = useRef<Song[] | null>(null);
+  /** Blob URL of the downloaded file currently playing (revoked on change). */
+  const objectUrl = useRef<string | null>(null);
+  /** Next song whose segments were pre-loaded, and at which variant. */
+  const prefetched = useRef<{ id: string; variant: (typeof VARIANTS)[number] } | null>(null);
+  const prefetchCtl = useRef<{ forId: string; ctl: AbortController } | null>(null);
 
   const [queue, setQueue] = useState<Song[]>([]);
   const [index, setIndex] = useState(0);
@@ -151,6 +168,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [autoplay, setAutoplay] = useState(true);
   const [sleep, setSleepState] = useState<SleepTimer>({ mode: "off" });
   const [bitrate, setBitrate] = useState<number | null>(null);
+  /** Playing from a downloaded file (no network needed). */
+  const [offlineSource, setOfflineSource] = useState(false);
 
   const current = queue[index] ?? null;
 
@@ -172,6 +191,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const load = useCallback(async (song: Song, autoPlay: boolean, startAt = 0) => {
     const audio = audioRef.current!;
     destroyEngine();
+    if (prefetchCtl.current && live.current.queue[live.current.index + 1]?.id !== song.id) {
+      prefetchCtl.current.ctl.abort();
+    }
+    prefetchCtl.current = null;
     loadedId.current = song.id;
     listened.current = { id: song.id, seconds: 0, lastTime: startAt, reported: false };
     pendingSeek.current = startAt > 0 ? startAt : null;
@@ -179,6 +202,36 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setStalled(false);
     setBitrate(null);
     setProgress({ time: startAt, duration: song.duration ?? 0, buffered: 0 });
+    setOfflineSource(false);
+    if (objectUrl.current) {
+      URL.revokeObjectURL(objectUrl.current);
+      objectUrl.current = null;
+    }
+
+    // Downloaded: play the stored file. Works with no network, on every browser.
+    if (isDownloaded(song.id)) {
+      const url = await offlineObjectUrl(song.id);
+      if (loadedId.current !== song.id) {
+        if (url) URL.revokeObjectURL(url);
+        return;
+      }
+      if (url) {
+        objectUrl.current = url;
+        setOfflineSource(true);
+        audio.src = url;
+        if (autoPlay) audio.play().catch(() => setPlaying(false));
+        return;
+      }
+    }
+    if (!navigator.onLine) {
+      // Stop whatever was playing before; this song can't load without a network.
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      setPlaying(false);
+      setError("Not downloaded. Connect to the internet to play this song.");
+      return;
+    }
 
     const quality = settingsStore.get().quality;
     const native = audio.canPlayType("application/vnd.apple.mpegurl") !== "";
@@ -197,7 +250,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
         audio.src = api.streamUrl(song.id);
       } else {
-        const hls = new HlsClass(hlsConfig(quality, lastEstimate.current));
+        // If this song was pre-loaded, start on that variant so the cached segments are used.
+        const pre = prefetched.current?.id === song.id ? VARIANTS.indexOf(prefetched.current.variant) : -1;
+        const hls = new HlsClass(hlsConfig(quality, lastEstimate.current, pre >= 0 ? pre : undefined));
         hlsRef.current = hls;
         let networkRetries = 0;
         hls.on(HlsClass.Events.MANIFEST_PARSED, () => {
@@ -287,6 +342,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     (fromEnded = false) => {
       const { queue, index, repeat, autoplay } = live.current;
       if (!queue.length) return;
+      // Offline: skip ahead to the next song that is downloaded.
+      if (!navigator.onLine) {
+        const after = queue.findIndex((s, k) => k > index && isDownloaded(s.id));
+        const wrap = repeat === "all" ? queue.findIndex((s) => isDownloaded(s.id)) : -1;
+        const j = after >= 0 ? after : wrap;
+        if (j >= 0) return startAt(queue, j);
+        return;
+      }
       if (index + 1 < queue.length) return startAt(queue, index + 1);
       if (repeat === "all") return startAt(queue, 0);
       if (autoplay && fromEnded) {
@@ -580,8 +643,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const s = sessionStore.get();
     if (!s.ids.length) return;
-    api
-      .songsByIds(s.ids)
+    // Offline (or server unreachable): rebuild the queue from downloaded songs.
+    const fromDownloads = () => {
+      const d = downloadsStore.get();
+      return { items: s.ids.map((id) => d[id]?.song).filter((x): x is Song => !!x) };
+    };
+    (navigator.onLine ? api.songsByIds(s.ids).catch(fromDownloads) : Promise.resolve(fromDownloads()))
       .then(({ items }) => {
         if (!items.length || live.current.queue.length) return;
         const cur = s.ids[s.index];
@@ -602,6 +669,45 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       time: s.ids[s.index] === queue[index]?.id ? s.time : 0,
     }));
   }, [queue, index]);
+
+  /* ---------------- pre-load the next song (HTTP cache) ----------------- */
+
+  useEffect(() => {
+    const prefetchNext = async (forId: string, next: Song, variant: (typeof VARIANTS)[number], signal: AbortSignal) => {
+      const get = (u: string) => fetch(u, { signal, credentials: "include" });
+      await (await get(api.streamUrl(next.id))).text();
+      const playlistUrl = api.streamUrl(next.id, variant);
+      const text = await (await get(playlistUrl)).text();
+      const uris = [
+        text.match(/#EXT-X-MAP:URI="([^"]+)"/)?.[1],
+        ...text.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")),
+      ].filter((u): u is string => !!u);
+      // One at a time so it never competes with the song that is playing.
+      for (const u of uris) {
+        const r = await get(new URL(u, new URL(playlistUrl, location.href)).href);
+        await r.arrayBuffer();
+      }
+      if (loadedId.current === forId) prefetched.current = { id: next.id, variant };
+    };
+
+    const unsubscribe = progressStore.subscribe(() => {
+      const { buffered, duration } = progressStore.get();
+      const hls = hlsRef.current;
+      const { queue, index, current } = live.current;
+      if (!hls || !current || !duration || buffered < duration - 2) return;
+      if (prefetchCtl.current?.forId === current.id) return; // already started for this song
+      const next = queue[index + 1];
+      if (!next || isDownloaded(next.id) || !navigator.onLine || saveData()) return;
+      const variant = variantForBitrate(hls.levels[hls.currentLevel]?.bitrate) ?? "48k";
+      prefetchCtl.current?.ctl.abort();
+      const ctl = new AbortController();
+      prefetchCtl.current = { forId: current.id, ctl };
+      prefetchNext(current.id, next, variant, ctl.signal).catch(() => {});
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   /* --------------------------- media session -------------------------- */
 
@@ -687,9 +793,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       autoplay,
       sleep,
       bitrate,
+      offlineSource,
       ...actions,
     }),
-    [queue, index, current, playing, buffering, stalled, error, shuffle, repeat, autoplay, sleep, bitrate, actions],
+    [queue, index, current, playing, buffering, stalled, error, shuffle, repeat, autoplay, sleep, bitrate, offlineSource, actions],
   );
 
   return (

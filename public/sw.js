@@ -2,8 +2,11 @@
  * - App shell: network-first navigation with offline fallback.
  * - Hashed build assets, icons and cover art: cache-first (they never change).
  * - API responses and audio streams are never cached here (HLS handles buffering).
+ * - Downloaded songs + their artwork live in the "mpc-offline-v1" cache (written by the app).
  */
-const VERSION = "mpc-v1";
+const VERSION = "mpc-v2";
+/** Offline downloads live here; never deleted on upgrade. */
+const OFFLINE = "mpc-offline-v1";
 const SHELL = `${VERSION}-shell`;
 const STATIC = `${VERSION}-static`;
 const COVERS = `${VERSION}-covers`;
@@ -20,7 +23,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => !k.startsWith(VERSION)).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => !k.startsWith(VERSION) && k !== OFFLINE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -62,7 +65,8 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (url.pathname.includes("/covers/") && /\.(jpg|jpeg|png|webp)$/.test(url.pathname)) {
-    event.respondWith(cacheFirst(request, COVERS));
+    // Artwork of downloaded songs is in the offline cache.
+    event.respondWith(caches.match(request).then((hit) => hit || cacheFirst(request, COVERS)));
     return;
   }
 

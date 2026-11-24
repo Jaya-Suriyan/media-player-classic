@@ -4,6 +4,8 @@ import { absUrl, formatTime, type Album, type Artist, type ArtistRef, type Cover
 import { toggleLike, useIsLiked } from "../lib/library";
 import { usePlayer } from "../player/PlayerContext";
 import { HeartFillIcon, HeartIcon, MoreIcon, MusicIcon, PauseIcon, PlayIcon } from "./Icons";
+import { DownloadedMark } from "./Downloads";
+import { downloadSong, removeDownload, supportsDownloads, useDownloadState } from "../lib/downloads";
 
 /** Lazy-loaded square artwork with a placeholder. Uses the small image unless `large`. */
 export function Cover({
@@ -73,6 +75,7 @@ export function LikeButton({ id, size = 18 }: { id: string; size?: number }) {
 
 function SongMenu({ song, onClose }: { song: Song; onClose: () => void }) {
   const p = usePlayer();
+  const { downloaded, progress } = useDownloadState(song.id);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onDoc = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && onClose();
@@ -99,6 +102,14 @@ function SongMenu({ song, onClose }: { song: Song; onClose: () => void }) {
       <button role="menuitem" onClick={act(() => p.playNext(song))}>Play next</button>
       <button role="menuitem" onClick={act(() => p.addToQueue(song))}>Add to queue</button>
       <button role="menuitem" onClick={act(() => toggleLike(song.id))}>Like / Unlike</button>
+      {supportsDownloads() &&
+        (downloaded ? (
+          <button role="menuitem" onClick={act(() => removeDownload(song.id))}>Remove download</button>
+        ) : (
+          <button role="menuitem" disabled={!!progress && progress.state !== "error"} onClick={act(() => downloadSong(song))}>
+            {progress && progress.state !== "error" ? "Downloading…" : "Download for offline"}
+          </button>
+        ))}
       <Link role="menuitem" to={`/song/${song.id}`} onClick={onClose}>Song details</Link>
       <Link role="menuitem" to={`/artist/${song.artist.id}`} onClick={onClose}>Go to artist</Link>
       {song.album && (
@@ -178,7 +189,10 @@ export function SongList({
             </div>
             {showCover && <Cover cover={s.cover} size={44} />}
             <div className="track-main">
-              <div className="track-title">{s.title}</div>
+              <div className="track-title">
+                {s.title}
+                <DownloadedMark id={s.id} />
+              </div>
               <div className="track-sub">
                 <ArtistLinks artists={s.artists} />
                 {showAlbum && s.album && (

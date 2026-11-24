@@ -57,9 +57,37 @@ export class LocalStorage implements Storage {
     }
   }
 
+  async list(prefix: string) {
+    const base = this.resolve(prefix);
+    const out: { key: string; size: number }[] = [];
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(base, { recursive: true, withFileTypes: true });
+    } catch {
+      return out;
+    }
+    for (const e of entries) {
+      if (!e.isFile()) continue;
+      const abs = path.join(e.parentPath, e.name);
+      out.push({ key: path.relative(this.root, abs).split(path.sep).join("/"), size: (await fsp.stat(abs)).size });
+    }
+    return out;
+  }
+
   async deletePrefix(prefix: string) {
     if (!prefix || prefix === "/") throw new Error("Refusing to delete storage root");
-    await fsp.rm(this.resolve(prefix), { recursive: true, force: true });
+    const target = this.resolve(prefix);
+    await fsp.rm(target, { recursive: true, force: true });
+    // Tidy up now-empty parent folders (e.g. covers/<songId>/), never the root.
+    let dir = path.dirname(target);
+    while (dir !== this.root && dir.startsWith(this.root + path.sep)) {
+      try {
+        await fsp.rmdir(dir);
+      } catch {
+        break; // not empty
+      }
+      dir = path.dirname(dir);
+    }
   }
 
   async url(key: string) {

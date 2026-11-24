@@ -9,6 +9,8 @@ import {
   HeadObjectCommand,
   ListObjectsV2Command,
   DeleteObjectsCommand,
+  DeleteObjectCommand,
+  PutBucketCorsCommand,
   PutObjectCommand,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
@@ -103,6 +105,43 @@ export class S3Storage implements Storage {
     } catch {
       return false;
     }
+  }
+
+  async list(prefix: string) {
+    const out: { key: string; size: number }[] = [];
+    let token: string | undefined;
+    do {
+      const res = await this.client.send(
+        new ListObjectsV2Command({ Bucket: this.opts.bucket, Prefix: prefix, ContinuationToken: token }),
+      );
+      for (const o of res.Contents ?? []) out.push({ key: o.Key!, size: o.Size ?? 0 });
+      token = res.IsTruncated ? res.NextContinuationToken : undefined;
+    } while (token);
+    return out;
+  }
+
+  async deleteObject(key: string) {
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.opts.bucket, Key: key }));
+  }
+
+  /** Allow browsers on these origins to fetch media directly (needed for streaming from the bucket). */
+  async setCors(origins: string[]) {
+    await this.client.send(
+      new PutBucketCorsCommand({
+        Bucket: this.opts.bucket,
+        CORSConfiguration: {
+          CORSRules: [
+            {
+              AllowedOrigins: origins.length ? origins : ["*"],
+              AllowedMethods: ["GET", "HEAD"],
+              AllowedHeaders: ["*"],
+              ExposeHeaders: ["Content-Length", "Content-Range", "ETag"],
+              MaxAgeSeconds: 86400,
+            },
+          ],
+        },
+      }),
+    );
   }
 
   async deletePrefix(prefix: string) {

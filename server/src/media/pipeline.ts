@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { albums, newId, songs } from "../db.js";
+import { albums, artists, nameKey, newId, songs } from "../db.js";
 import { config } from "../config.js";
-import { storage, IMMUTABLE } from "../storage/index.js";
+import { storage, IMMUTABLE, backendOf, keyFor, type BackendName } from "../storage/index.js";
+import { uploadTarget } from "../storage-settings.js";
 import { createSong, getSong, setSongFields, type SongInput } from "../catalog.js";
 import { extractMetadata } from "./metadata.js";
 import { masterPlaylist, resizeCover, transcodeToHls } from "./ffmpeg.js";
+import { DEFAULT_DOWNLOAD, remuxVariantDir } from "./offline.js";
 
 fs.mkdirSync(config.tmpDir, { recursive: true });
 
@@ -33,7 +35,8 @@ const tmpOriginal = (songId: string) => path.join(config.tmpDir, `orig-${songId}
 /* ------------------------------------------------------------------ */
 
 /** Store an image as two square JPEGs (160px for lists, 600px for players). Returns the key prefix. */
-export async function storeCover(ownerId: string, image: Buffer): Promise<string> {
+/** Store artwork on `backend` (defaults to the current upload target). */
+export async function storeCover(ownerId: string, image: Buffer, backend: BackendName = uploadTarget()): Promise<string> {
   const work = await fsp.mkdtemp(path.join(config.tmpDir, "cover-"));
   try {
     const src = path.join(work, "src");
@@ -42,7 +45,7 @@ export async function storeCover(ownerId: string, image: Buffer): Promise<string
     const lg = path.join(work, "lg.jpg");
     await resizeCover(src, sm, 160, 5);
     await resizeCover(src, lg, 600, 3);
-    const prefix = `covers/${ownerId}/${newId().slice(0, 6)}`;
+    const prefix = keyFor(backend, `covers/${ownerId}/${newId().slice(0, 6)}`);
     await storage.putFile(`${prefix}/sm.jpg`, sm, { contentType: "image/jpeg", cacheControl: IMMUTABLE });
     await storage.putFile(`${prefix}/lg.jpg`, lg, { contentType: "image/jpeg", cacheControl: IMMUTABLE });
     return prefix;
@@ -63,11 +66,19 @@ export async function deleteCover(prefix: string | null | undefined) {
  * Take an uploaded / imported audio file, read its tags, store the original
  * and queue it for transcoding. The temp file is moved and owned by the pipeline.
  */
-export async function ingestAudioFile(tmpPath: string, originalName: string, overrides: Partial<SongInput> = {}) {
+export async function ingestAudioFile(
+  tmpPath: string,
+  originalName: string,
+  overrides: Partial<SongInput> = {},
+  /** Where this song's files go (1 local, 2 Cloudflare R2, 3 Amazon S3). */
+  backend: BackendName = uploadTarget(),
+) {
   const ext = path.extname(originalName).toLowerCase() || ".bin";
   const id = newId();
   const size = (await fsp.stat(tmpPath)).size;
-  const meta = await extractMetadata(tmpPath, originalName);
+  const meta = await extractMetadata(tmpPath, originalName, {
+    isKnownArtist: async (name) => !!(await artists.findOne({ nameKey: nameKey(name) }, { projection: { _id: 1 } })),
+  });
 
   const input: SongInput = {
     title: meta.title,
@@ -85,7 +96,7 @@ export async function ingestAudioFile(tmpPath: string, originalName: string, ove
     if (v !== undefined && v !== null && v !== "") (input as unknown as Record<string, unknown>)[k] = v;
   }
 
-  const originalKey = `songs/${id}/original${ext}`;
+  const originalKey = keyFor(backend, `songs/${id}/original${ext}`);
   await storage.putFile(originalKey, tmpPath, { contentType: contentTypeFor(ext) });
   // Keep a local copy so the worker does not have to download it again.
   await fsp.rename(tmpPath, tmpOriginal(id));
@@ -94,7 +105,7 @@ export async function ingestAudioFile(tmpPath: string, originalName: string, ove
 
   if (meta.picture) {
     try {
-      const prefix = await storeCover(id, meta.picture.data);
+      const prefix = await storeCover(id, meta.picture.data, backend);
       await setSongFields(id, { coverKey: prefix });
       if (song.albumId) await albums.updateOne({ _id: song.albumId, coverKey: null }, { $set: { coverKey: prefix } });
     } catch {
@@ -165,9 +176,16 @@ async function processSong(id: string) {
     if (!fs.existsSync(local)) await storage.download(row.originalKey, local);
     await transcodeToHls(local, work);
     await fsp.writeFile(path.join(work, "master.m3u8"), masterPlaylist());
+    // Ready-made single file for offline downloads (stream copy, no re-encode).
+    try {
+      await remuxVariantDir(path.join(work, DEFAULT_DOWNLOAD), path.join(work, `offline-${DEFAULT_DOWNLOAD}.m4a`));
+    } catch (err) {
+      console.warn(`[transcode] ${id}: offline file skipped:`, (err as Error).message);
+    }
 
     // Versioned prefix so re-transcodes never collide with cached segments.
-    const hlsKey = `songs/${id}/hls/${newId().slice(0, 8)}`;
+    // Streams live next to the original, on the same storage.
+    const hlsKey = keyFor(backendOf(row.originalKey), `songs/${id}/hls/${newId().slice(0, 8)}`);
     await uploadDir(work, hlsKey);
 
     let duration = row.duration;
@@ -195,7 +213,7 @@ export async function resumePendingJobs() {
   if (rows.length) console.log(`[transcode] resumed ${rows.length} job(s)`);
 }
 
-export async function deleteSongMedia(id: string) {
-  await storage.deletePrefix(`songs/${id}/`).catch(() => {});
+export async function deleteSongMedia(id: string, originalKey: string | null) {
+  await storage.deletePrefix(keyFor(backendOf(originalKey), `songs/${id}/`)).catch(() => {});
   await fsp.rm(tmpOriginal(id), { force: true });
 }

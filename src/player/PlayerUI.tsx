@@ -22,6 +22,7 @@ import {
   VolumeIcon,
 } from "../components/Icons";
 import { usePlayer, useProgress } from "./PlayerContext";
+import { DownloadButton } from "../components/Downloads";
 
 /* ------------------------------------------------------------------ */
 /* Seek bar (pointer + keyboard accessible)                             */
@@ -280,6 +281,7 @@ function StatusLine() {
   const p = usePlayer();
   if (p.error) return <div className="status-line err">{p.error}</div>;
   if (p.stalled) return <div className="status-line">Weak connection, reconnecting…</div>;
+  if (p.offlineSource && !navigator.onLine) return <div className="status-line ok">Playing downloaded copy</div>;
   return null;
 }
 
@@ -325,6 +327,7 @@ export function PlayerBar({ onOpenNowPlaying, onToggleQueue }: { onOpenNowPlayin
         </span>
         <span className="desk-only right-tools">
           <QualityMenu />
+          <DownloadButton song={c} size={18} />
           <SleepMenu />
           <button className="icon-btn" onClick={onToggleQueue} aria-label="Queue">
             <QueueIcon size={18} />
@@ -510,6 +513,7 @@ export function NowPlaying({ open, onClose }: { open: boolean; onClose: () => vo
         <TransportControls big />
         <div className="np-tools">
           <QualityMenu />
+          <DownloadButton song={c} size={22} />
           <SleepMenu />
         </div>
       </div>

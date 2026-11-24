@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, formatBytes, type AdminSong } from "../../lib/api";
+import { api, formatBytes, type AdminSong, type StorageBackend, type StorageState } from "../../lib/api";
 import { UploadIcon } from "../../components/Icons";
 import { Cover } from "../../components/Media";
 import { StatusBadge } from "./SongManager";
@@ -41,7 +41,14 @@ async function filesFromDrop(dt: DataTransfer): Promise<File[]> {
 
 export default function UploadPanel({ onChange }: { onChange: () => void }) {
   const [items, setItems] = useState<Item[]>([]);
-  const [fields, setFields] = useState({ albumTitle: "", albumArtist: "", artistName: "", genre: "", year: "" });
+  const [fields, setFields] = useState({ albumTitle: "", albumArtist: "", artistName: "", genre: "", year: "", storage: "" });
+  const [storage, setStorage] = useState<StorageState | null>(null);
+  useEffect(() => {
+    api.admin.storage.get().then((s) => {
+      setStorage(s);
+      setFields((f) => ({ ...f, storage: f.storage || s.effectiveTarget }));
+    }, () => {});
+  }, []);
   const [dragOver, setDragOver] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -114,6 +121,25 @@ export default function UploadPanel({ onChange }: { onChange: () => void }) {
 
   return (
     <div className="upload-panel">
+      {storage && (
+        <div className="save-to">
+          <label>
+            Save to
+            <select value={fields.storage} onChange={(e) => setFields((f) => ({ ...f, storage: e.target.value }))}>
+              {(["local", "r2", "s3"] as StorageBackend[]).map((b, i) => (
+                <option key={b} value={b} disabled={!storage.configured[b]}>
+                  {i + 1}. {({ local: "Local (this server)", r2: "Cloudflare R2", s3: "Amazon S3" } as const)[b]}
+                  {storage.configured[b] ? "" : " (not set up)"}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Link to="/admin/storage" className="muted small">
+            Storage settings
+          </Link>
+        </div>
+      )}
+
       <div
         className={`dropzone ${dragOver ? "over" : ""}`}
         onDragOver={(e) => {

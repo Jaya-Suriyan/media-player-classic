@@ -14,10 +14,12 @@ import { resumePendingJobs } from "./media/pipeline.js";
 import { publicRoutes } from "./routes/public.js";
 import { streamRoutes } from "./routes/stream.js";
 import { adminRoutes } from "./routes/admin.js";
-import { storage } from "./storage/index.js";
+import { storageRoutes } from "./routes/storage.js";
+import { loadStorageSettings, uploadTarget } from "./storage-settings.js";
 
 async function main() {
   await connectDb();
+  await loadStorageSettings();
   await seedAdmin();
   await reindexOutdatedSongs();
 
@@ -47,11 +49,12 @@ async function main() {
     return reply.code(status).send({ error: status >= 500 ? "Internal server error" : e.message });
   });
 
-  app.get("/api/health", async () => ({ ok: true, storage: storage.driver }));
+  app.get("/api/health", async () => ({ ok: true, storage: uploadTarget() }));
 
   await app.register(publicRoutes);
   await app.register(streamRoutes);
   await app.register(adminRoutes);
+  await app.register(storageRoutes);
 
   // Serve the built web app (npm run build at repo root) with SPA fallback.
   if (fs.existsSync(config.webDistDir)) {
@@ -74,7 +77,7 @@ async function main() {
   });
 
   await app.listen({ port: config.port, host: config.host });
-  console.log(`Media Player Classic API on http://localhost:${config.port}  (storage: ${storage.driver})`);
+  console.log(`Media Player Classic API on http://localhost:${config.port}  (uploads go to: ${uploadTarget()})`);
 
   await resumePendingJobs();
 
