@@ -1,99 +1,98 @@
 import React from "react";
-import { MOCK_SONGS } from "../data/mockSongs";
 import { Link } from "react-router-dom";
+import { api } from "../lib/api";
+import { useAsync } from "../lib/hooks";
+import { historyStore } from "../lib/library";
+import { AlbumCard, ArtistCard, ErrorBox, Loading, Shelf, SongCard, SongList } from "../components/Media";
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+}
+
+function RecentlyPlayed() {
+  const ids = historyStore.use();
+  const top = ids.slice(0, 12);
+  const { data } = useAsync(() => api.songsByIds(top), [top.join(",")]);
+  if (!data?.items.length) return null;
+  return (
+    <Shelf title="Recently played" to="/library/history">
+      {data.items.map((s) => (
+        <SongCard key={s.id} song={s} list={data.items} />
+      ))}
+    </Shelf>
+  );
+}
 
 export default function Home() {
+  const { data, error, loading, reload } = useAsync(() => api.home(), []);
+
+  if (error && !data) return <ErrorBox error={error} onRetry={reload} />;
+  if (loading && !data) return <Loading />;
+  if (!data) return null;
+
+  const empty = !data.newReleases.length;
   return (
-    <div>
-      <section className="hero card" style={{ marginBottom: 18 }}>
-        <h3 style={{ margin: 0 }}>Editorial Picks</h3>
-        <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
-          {MOCK_SONGS.slice(0, 6).map((s) => (
-            <div key={s.id} style={{ width: 150 }} className="card">
-              <div
-                style={{
-                  height: 90,
-                  background: "#08101b",
-                  borderRadius: 6,
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                  backgroundImage: `url(${s.cover})`,
-                }}
-              />
-              <div className="small" style={{ marginTop: 8 }}>
-                {s.title}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+    <div className="home">
+      <h1 className="page-title">{greeting()}</h1>
 
-      <section className="row-section">
-        <div className="row-title">Radio Stations</div>
-        <div className="circular-row">
-          {MOCK_SONGS.slice(0, 8).map((s) => (
-            <div key={s.id} className="circle-item">
-              <div
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  borderRadius: "50%",
-                  background: "linear-gradient(135deg,#2b6bff,#5fb3ff)",
-                }}
-              />
-            </div>
-          ))}
+      {empty && (
+        <div className="empty-hero">
+          <h2>Your library is empty</h2>
+          <p>Sign in as admin and upload some music to get started.</p>
+          <Link className="btn-primary" to="/admin">
+            Upload music
+          </Link>
         </div>
-      </section>
+      )}
 
-      <section className="row-section">
-        <div className="row-title">Recommended Artist Stations</div>
-        <div className="circular-row">
-          {MOCK_SONGS.slice(0, 8).map((s) => (
-            <div key={s.id} style={{ textAlign: "center" }}>
-              <div className="circle-item">
-                <div
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    borderRadius: "50%",
-                    background: "linear-gradient(135deg,#ff5f7a,#ffb86b)",
-                  }}
-                />
-              </div>
-              <div className="caption small">{s.artist}</div>
-            </div>
+      {data.genres.length > 0 && (
+        <div className="chips" role="list">
+          {data.genres.map((g) => (
+            <Link role="listitem" key={g.genre} to={`/genre/${encodeURIComponent(g.genre)}`} className="chip">
+              {g.genre}
+            </Link>
           ))}
         </div>
-      </section>
+      )}
 
-      <section className="row-section">
-        <h3 className="row-title">What's Hot</h3>
-        <div className="grid">
-          {MOCK_SONGS.map((s) => (
-            <div key={s.id} className="song card">
-              <div
-                style={{
-                  width: 56,
-                  height: 56,
-                  background: "#08101b",
-                  borderRadius: 6,
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                  backgroundImage: `url(${s.cover})`,
-                }}
-              />
-              <div className="meta">
-                <div style={{ fontWeight: 700 }}>{s.title}</div>
-                <div className="small">
-                  <Link to={`/artist/${s.artistId}`}>{s.artist}</Link> •{" "}
-                  <Link to={`/album/${s.albumId}`}>{s.album}</Link>
-                </div>
-              </div>
-            </div>
+      <RecentlyPlayed />
+
+      {data.trending.length > 0 && (
+        <section className="shelf">
+          <div className="shelf-head">
+            <h2>Trending now</h2>
+            <Link to="/browse/popular" className="see-all">
+              See all
+            </Link>
+          </div>
+          <SongList songs={data.trending.slice(0, 6)} />
+        </section>
+      )}
+
+      {data.newReleases.length > 0 && (
+        <Shelf title="New releases" to="/browse/new">
+          {data.newReleases.map((s) => (
+            <SongCard key={s.id} song={s} list={data.newReleases} />
           ))}
-        </div>
-      </section>
+        </Shelf>
+      )}
+
+      {data.albums.length > 0 && (
+        <Shelf title="Albums" to="/browse/albums">
+          {data.albums.map((a) => (
+            <AlbumCard key={a.id} album={a} />
+          ))}
+        </Shelf>
+      )}
+
+      {data.artists.length > 0 && (
+        <Shelf title="Popular artists" to="/browse/artists">
+          {data.artists.map((a) => (
+            <ArtistCard key={a.id} artist={a} />
+          ))}
+        </Shelf>
+      )}
     </div>
   );
 }

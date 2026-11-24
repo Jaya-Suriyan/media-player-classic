@@ -1,14 +1,19 @@
 {
-  "name": "media-player-classic-ui",
+  "name": "media-player-classic",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "dev:server": "npm --prefix server run dev",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit && npm --prefix server run typecheck",
+    "start": "npm --prefix server start"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.2",
+    "hls.js": "^1.7.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.17.0"

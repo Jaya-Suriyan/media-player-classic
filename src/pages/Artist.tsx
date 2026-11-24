@@ -1,81 +1,51 @@
-import React from "react";
-import { useParams, Link } from "react-router-dom";
-import { MOCK_SONGS } from "../data/mockSongs";
+import React, { useState } from "react";
+import { useParams } from "react-router-dom";
+import { api } from "../lib/api";
+import { useAsync } from "../lib/hooks";
+import { AlbumCard, Cover, ErrorBox, Loading, PlayButton, Shelf, SongList } from "../components/Media";
 
 export default function Artist() {
-  const { id } = useParams();
-  const songs = MOCK_SONGS.filter((s) => s.artistId === id);
-  if (songs.length === 0) return <div>Artist not found</div>;
+  const { id = "" } = useParams();
+  const { data, error, reload } = useAsync(() => api.artist(id), [id]);
+  const [showAll, setShowAll] = useState(false);
 
-  const artist = songs[0].artist;
+  if (error) return <ErrorBox error={error} onRetry={error.message.includes("not found") ? undefined : reload} />;
+  if (!data || data.artist.id !== id) return <Loading />;
+  const { artist, songs, albums } = data;
+
   return (
     <div>
-      <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-        <div
-          style={{
-            width: 160,
-            height: 160,
-            background: "#08101b",
-            borderRadius: 8,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            backgroundImage: `url(${songs[0].cover})`,
-          }}
-        />
-        <div>
-          <h2 style={{ margin: 0 }}>{artist}</h2>
-          <div className="small">{songs.length} songs</div>
-          <div style={{ marginTop: 12 }}>
-            <button
-              className="btn"
-              onClick={() =>
-                window.dispatchEvent(
-                  new CustomEvent("play-artist", { detail: { artistId: id } })
-                )
-              }
-            >
-              Play
-            </button>
-            <button className="btn">Follow</button>
+      <header className="hero">
+        <Cover cover={artist.image} large round className="hero-art" />
+        <div className="hero-meta">
+          <div className="eyebrow">Artist</div>
+          <h1>{artist.name}</h1>
+          <div className="muted">{artist.songCount} songs</div>
+          <div className="hero-actions">
+            <PlayButton songs={songs} />
           </div>
         </div>
-      </div>
+      </header>
 
-      <section style={{ marginTop: 20 }}>
-        <h3>Top tracks</h3>
-        <div className="grid">
-          {songs.map((s) => (
-            <div key={s.id} className="song card">
-              <div
-                style={{
-                  width: 56,
-                  height: 56,
-                  background: "#08101b",
-                  borderRadius: 6,
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                  backgroundImage: `url(${s.cover})`,
-                }}
-              />
-              <div className="meta">
-                <div style={{ fontWeight: 700 }}>
-                  <Link to={`/song/${s.id}`}>{s.title}</Link>
-                </div>
-                <div className="small">
-                  <Link to={`/album/${s.albumId}`}>{s.album}</Link>
-                </div>
-              </div>
-              <div className="small">
-                {s.duration
-                  ? Math.floor(s.duration / 60) +
-                    ":" +
-                    (s.duration % 60).toString().padStart(2, "0")
-                  : "—"}
-              </div>
-            </div>
-          ))}
+      <section className="shelf">
+        <div className="shelf-head">
+          <h2>Popular</h2>
         </div>
+        <SongList songs={showAll ? songs : songs.slice(0, 10)} />
+        {songs.length > 10 && (
+          <button className="link-btn" onClick={() => setShowAll((s) => !s)}>
+            {showAll ? "Show less" : `Show all ${songs.length}`}
+          </button>
+        )}
       </section>
+
+      {albums.length > 0 && (
+        <Shelf title="Albums">
+          {albums.map((a) => (
+            <AlbumCard key={a.id} album={a} />
+          ))}
+        </Shelf>
+      )}
     </div>
   );
 }
